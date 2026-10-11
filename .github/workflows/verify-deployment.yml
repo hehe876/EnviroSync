@@ -1,0 +1,28 @@
+name: Verify EnviroSync Deployment Permissions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: hosting
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-south-1
+
+      - name: Verify deployment access
+        run: |
+          aws sts get-caller-identity
+          aws cloudformation describe-stacks --stack-name envirosync-hosting --region ap-south-1 --query 'Stacks[0].StackStatus' --output text
+          aws lambda get-function --function-name envirosync-hosting-Backend-J4RtQQ7CfbK5 --region ap-south-1 --query 'Configuration.State' --output text
+          aws s3api get-bucket-location --bucket envirosync-hosting-webbucket-hxm7prg2m4yj --query LocationConstraint --output text
+          aws cloudfront get-distribution --id E1S13L3810DI2A --query 'Distribution.Status' --output text
