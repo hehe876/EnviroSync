@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EnviroSync M4C admin-only Cognito Lite pool; deploy separately after free-plan cost review'
+
+Parameters:
+  WebsiteUrl:
+    Type: String
+    Description: 'Existing website URL from envirosync-hosting WebsiteUrl output, without trailing slash'
+    AllowedPattern: 'https://[A-Za-z0-9.-]+'
+  DomainPrefix:
+    Type: String
+    Description: 'Unique lowercase prefix for Cognito hosted login in ap-south-1'
+    AllowedPattern: '[a-z0-9][a-z0-9-]{5,50}'
+
+Resources:
+  AdminPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: envirosync-admins
+      UserPoolTier: LITE
+      UsernameAttributes: [email]
+      UsernameConfiguration:
+        CaseSensitive: false
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: admin_only
+            Priority: 1
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 14
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      MfaConfiguration: 'ON'
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: envirosync-admin
+      Description: Only users in this group may publish EnviroSync datasets
+      UserPoolId: !Ref AdminPool
+
+  BrowserClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref AdminPool
+      ClientName: envirosync-browser-pkce
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs:
+        - !Sub '${WebsiteUrl}/'
+        - 'http://localhost:5173/'
+      LogoutURLs:
+        - !Sub '${WebsiteUrl}/'
+        - 'http://localhost:5173/'
+      AccessTokenValidity: 15
+      IdTokenValidity: 60
+      RefreshTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+      ExplicitAuthFlows: [ALLOW_REFRESH_TOKEN_AUTH]
+      EnableTokenRevocation: true
+
+  HostedDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Ref DomainPrefix
+      UserPoolId: !Ref AdminPool
+
+Outputs:
+  UserPoolId:
+    Value: !Ref AdminPool
+  ClientId:
+    Value: !Ref BrowserClient
+  CognitoDomain:
+    Value: !Sub 'https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
+  AdminGroupName:
+    Value: !Ref AdminGroup

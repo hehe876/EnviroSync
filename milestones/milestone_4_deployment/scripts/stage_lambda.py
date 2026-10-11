@@ -13,6 +13,7 @@ DEPENDENCIES = """fastapi>=0.115,<1
 mangum>=0.19,<1
 boto3>=1.34,<2
 python-dotenv>=1,<2
+PyJWT[crypto]>=2.9,<3
 """
 
 

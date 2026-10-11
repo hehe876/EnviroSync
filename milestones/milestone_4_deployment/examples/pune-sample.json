@@ -1,0 +1,5 @@
+[
+  {"date": "2025-07-01", "temp_max_c": 32.5, "temp_min_c": 23.1, "precipitation_mm": 0.0},
+  {"date": "2025-07-02", "temp_max_c": 31.0, "temp_min_c": 22.0, "precipitation_mm": 3.5},
+  {"date": "2025-07-03", "temp_max_c": 30.8, "temp_min_c": 21.7, "precipitation_mm": 5.2}
+]

@@ -1,4 +1,4 @@
-/** Browser-safe HTTP client. ALL AWS credentials remain in the Python backend. */
+/** Browser-safe HTTP client. Never accepts or exposes AWS credentials. */
 export class ApiError extends Error {
   constructor(message, { code = "REQUEST_FAILED", status = 0 } = {}) {
     super(message);
@@ -22,9 +22,15 @@ export async function requestJson(baseUrl, endpoint, params = {}, options = {}, 
   let response;
   try {
     response = await fetcher(makeUrl(baseUrl, endpoint, params), {
-      method: "GET",
-      headers: { Accept: "application/json" },
+      method: options.method || "GET",
+      headers: {
+        Accept: "application/json",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+      },
+      ...(options.body ? { body: JSON.stringify(options.body) } : {}),
       signal: options.signal,
+      cache: "no-store",
     });
   } catch (error) {
     if (error?.name === "AbortError") throw error;
@@ -52,5 +58,7 @@ export function createApi(baseUrl = "", fetcher = fetch) {
     datasets: (options) => request("/api/datasets", {}, options),
     observations: (params, options) => request("/api/observations", params, options),
     compare: (params, options) => request("/api/compare", params, options),
+    adminSession: (token) => request("/api/admin/session", {}, { token }),
+    uploadDataset: (payload, token) => request("/api/admin/datasets", {}, { method: "POST", body: payload, token }),
   };
 }

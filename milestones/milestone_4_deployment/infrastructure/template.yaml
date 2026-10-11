@@ -1,7 +1,22 @@
-
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'EnviroSync M4B: React CloudFront hosting with cross-region S3 environmental federation'
+Description: 'EnviroSync M4C: preserve existing M4B hosting with optional authenticated S3 uploads'
+
+Parameters:
+  UploadsEnabled:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: 'Set to true only after Cognito Lite pool and administrator are configured'
+  AdminUserPoolId:
+    Type: String
+    Default: ''
+  AdminClientId:
+    Type: String
+    Default: ''
+
+Conditions:
+  EnableUploads: !Equals [!Ref UploadsEnabled, 'true']
 
 Globals:
   Function:
@@ -25,7 +40,6 @@ Resources:
     Properties:
       CodeUri: ../build/lambda/
       Handler: milestones.milestone_2_api.lambda_handler.handler
-
       Environment:
         Variables:
           ENVIROSYNC_HOSTING_ONLY: 'false'
@@ -34,25 +48,23 @@ Resources:
           INDIA_REGION: 'ap-south-1'
           LONDON_BUCKET: 'envirosync-london-2b13ce3af7'
           LONDON_REGION: 'eu-west-2'
-
+          ENVIROSYNC_UPLOADS_ENABLED: !Ref UploadsEnabled
+          ENVIROSYNC_COGNITO_USER_POOL_ID: !Ref AdminUserPoolId
+          ENVIROSYNC_COGNITO_CLIENT_ID: !Ref AdminClientId
       Policies:
         - Version: '2012-10-17'
           Statement:
-            - Sid: ReadChennaiDataAndCatalog
+            - Sid: ReadOriginalChennaiDataAndCatalog
               Effect: Allow
-              Action:
-                - s3:GetObject
+              Action: [s3:GetObject]
               Resource:
                 - arn:aws:s3:::envirosync-chennai-2b13ce3af7/envirosync/v1/catalog/datasets.json
                 - arn:aws:s3:::envirosync-chennai-2b13ce3af7/envirosync/v1/datasets/chennai-daily-weather.json
-
-            - Sid: ReadLondonData
+            - Sid: ReadOriginalLondonData
               Effect: Allow
-              Action:
-                - s3:GetObject
+              Action: [s3:GetObject]
               Resource:
                 - arn:aws:s3:::envirosync-london-2b13ce3af7/envirosync/v1/datasets/london-daily-weather.json
-
       Events:
         GetApi:
           Type: HttpApi
@@ -60,6 +72,45 @@ Resources:
             ApiId: !Ref Api
             Path: '/api/{proxy+}'
             Method: GET
+        PostApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/api/{proxy+}'
+            Method: POST
+
+  UploadWritePolicy:
+    Type: AWS::IAM::Policy
+    Condition: EnableUploads
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-admin-upload-prefix-only'
+      Roles:
+        - !Ref BackendRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ListOnlyUploadedRegistry
+            Effect: Allow
+            Action: [s3:ListBucket]
+            Resource: arn:aws:s3:::envirosync-chennai-2b13ce3af7
+            Condition:
+              StringLike:
+                s3:prefix:
+                  - envirosync/v1/uploads/manifests/
+          - Sid: ReadOnlyUploadedRegistryAndDatasets
+            Effect: Allow
+            Action: [s3:GetObject]
+            Resource:
+              - arn:aws:s3:::envirosync-chennai-2b13ce3af7/envirosync/v1/uploads/manifests/*
+              - arn:aws:s3:::envirosync-chennai-2b13ce3af7/envirosync/v1/uploads/datasets/*
+              - arn:aws:s3:::envirosync-london-2b13ce3af7/envirosync/v1/uploads/datasets/*
+          - Sid: WriteOnlyNewUploadedRegistryAndDatasets
+            Effect: Allow
+            Action: [s3:PutObject]
+            Resource:
+              - arn:aws:s3:::envirosync-chennai-2b13ce3af7/envirosync/v1/uploads/manifests/*
+              - arn:aws:s3:::envirosync-chennai-2b13ce3af7/envirosync/v1/uploads/datasets/*
+              - arn:aws:s3:::envirosync-london-2b13ce3af7/envirosync/v1/uploads/datasets/*
 
   ApiLogs:
     Type: AWS::Logs::LogGroup
@@ -127,7 +178,7 @@ Resources:
           - PathPattern: '/api/*'
             TargetOriginId: BackendHttpApi
             ViewerProtocolPolicy: redirect-to-https
-            AllowedMethods: [GET, HEAD, OPTIONS]
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
             CachedMethods: [GET, HEAD]
             Compress: true
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
@@ -154,21 +205,16 @@ Outputs:
   WebsiteUrl:
     Description: Public HTTPS URL for React + API
     Value: !Sub 'https://${Distribution.DomainName}'
-
   ApiHealthUrl:
     Description: Public health endpoint served via CloudFront
     Value: !Sub 'https://${Distribution.DomainName}/api/health'
-
   ApiGatewayUrl:
-    Description: Direct API Gateway URL (also public, read-only)
+    Description: Direct API Gateway URL (also public, reads only without admin token)
     Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
-
   WebBucketName:
-    Description: New private React-only bucket; not the data buckets
+    Description: Private React-only bucket; not the regional datasets
     Value: !Ref WebBucket
-
   DistributionId:
     Value: !Ref Distribution
-
   BackendFunctionName:
     Value: !Ref Backend

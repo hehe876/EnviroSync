@@ -1,7 +1,5 @@
-﻿
-name: Deploy EnviroSync M4B (Free account)
-
-# Manual deployment prevents unexpected AWS Free Plan usage.
+name: Deploy EnviroSync M4C (Free account)
+# Manual only: never deploy automatically or create Cognito from this workflow.
 on:
   workflow_dispatch:
 
@@ -17,7 +15,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: hosting
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,21 +33,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e '.[dev]'
-          python -m pip install 'PyYAML>=6.0,<7.0'
           python -m pytest -q
 
       - name: Frontend tests and production build
         working-directory: milestones/milestone_3_frontend
         env:
           VITE_API_BASE_URL: ''
+          VITE_COGNITO_DOMAIN: ${{ vars.COGNITO_DOMAIN }}
+          VITE_COGNITO_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run test
           npm run build
 
       - name: Stage canonical Lambda modules
-        run: |
-          python milestones/milestone_4_deployment/scripts/stage_lambda.py
+        run: python milestones/milestone_4_deployment/scripts/stage_lambda.py
 
       - name: Assume short-lived AWS credentials (GitHub OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -65,26 +62,53 @@ jobs:
         run: |
           python milestones/milestone_4_deployment/scripts/preflight_free_plan.py --region ap-south-1
 
-      - name: Deploy cross-region federation stack
+      - name: Check opt-in upload configuration
+        env:
+          UPLOADS_ENABLED: ${{ vars.ENVIROSYNC_UPLOADS_ENABLED }}
+          ADMIN_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
+          ADMIN_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
+          ADMIN_DOMAIN: ${{ vars.COGNITO_DOMAIN }}
+        run: |
+          if [ "${UPLOADS_ENABLED:-false}" = true ]; then
+            test -n "$ADMIN_USER_POOL_ID" && test -n "$ADMIN_CLIENT_ID" && test -n "$ADMIN_DOMAIN" || {
+              echo 'Cognito variables missing; refusing to enable uploads.' >&2
+              exit 1
+            }
+          elif [ -n "$UPLOADS_ENABLED" ] && [ "$UPLOADS_ENABLED" != false ]; then
+            echo 'ENVIROSYNC_UPLOADS_ENABLED must be true or false.' >&2
+            exit 1
+          fi
+
+      - name: Deploy preserved M4B stack with optional admin upload policy
+        env:
+          UPLOADS_ENABLED: ${{ vars.ENVIROSYNC_UPLOADS_ENABLED }}
+          ADMIN_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
+          ADMIN_CLIENT_ID: ${{ vars.COGNITO_CLIENT_ID }}
         run: |
           sam validate --template-file milestones/milestone_4_deployment/infrastructure/template.yaml
           sam build --template-file milestones/milestone_4_deployment/infrastructure/template.yaml --build-dir .aws-sam/build
-          sam deploy --template-file .aws-sam/build/template.yaml --stack-name envirosync-hosting --region ap-south-1 --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-xze8mghbmwfk --capabilities CAPABILITY_IAM --no-confirm-changeset --no-fail-on-empty-changeset
+          PARAMS=("UploadsEnabled=false")
+          if [ "${UPLOADS_ENABLED:-false}" = true ]; then
+            PARAMS=("UploadsEnabled=true" "AdminUserPoolId=$ADMIN_USER_POOL_ID" "AdminClientId=$ADMIN_CLIENT_ID")
+          fi
+          sam deploy \
+            --template-file .aws-sam/build/template.yaml \
+            --stack-name envirosync-hosting \
+            --region ap-south-1 \
+            --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-xze8mghbmwfk \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides "${PARAMS[@]}" \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
 
       - name: Publish React to private S3 bucket, invalidate CloudFront
         run: |
           aws cloudformation describe-stacks --stack-name envirosync-hosting --region ap-south-1 --query 'Stacks[0].Outputs' --output json > /tmp/envirosync-outputs.json
-
           WEB_BUCKET=$(python -c "import json; o=json.load(open('/tmp/envirosync-outputs.json')); print(next(x['OutputValue'] for x in o if x['OutputKey']=='WebBucketName'))")
-
           DIST_ID=$(python -c "import json; o=json.load(open('/tmp/envirosync-outputs.json')); print(next(x['OutputValue'] for x in o if x['OutputKey']=='DistributionId'))")
-
           URL=$(python -c "import json; o=json.load(open('/tmp/envirosync-outputs.json')); print(next(x['OutputValue'] for x in o if x['OutputKey']=='WebsiteUrl'))")
-
           aws s3 sync milestones/milestone_3_frontend/dist "s3://$WEB_BUCKET/" --delete --region ap-south-1 --cache-control 'public,max-age=300'
-
           aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths '/*'
-
           echo "ENV_URL=$URL" >> "$GITHUB_ENV"
 
       - name: Verify public HTTPS federation endpoints

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import Icon from "./components/Icon.jsx";
 import SeriesChart from "./components/SeriesChart.jsx";
 import StatusPanel from "./components/StatusPanel.jsx";
+import AdminUpload from "./components/AdminUpload.jsx";
+import { completeAdminSignIn } from "./lib/admin.mjs";
 import { createApi } from "./lib/api.mjs";
 import { formatDate, overlap, suggestedPeriod, validatePeriod, dayCount } from "./lib/dates.mjs";
 import { METRICS, formatValue, meanValue, sumValue, comparePointsToCSV } from "./lib/format.mjs";
@@ -48,6 +50,23 @@ export default function App() {
   const [comparison, setComparison] = useState({ loading: false, data: null, error: null });
   const [observations, setObservations] = useState({ loading: false, data: null, error: null });
   const [mobileNav, setMobileNav] = useState(false);
+  const [adminToken, setAdminToken] = useState(null);
+  const [adminExpiry, setAdminExpiry] = useState(0);
+  const [adminAuthError, setAdminAuthError] = useState("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("code") && !params.has("error")) return;
+    let active = true;
+    completeAdminSignIn().then(async (session) => {
+      if (!session) return;
+      await api.adminSession(session.accessToken);
+      if (active) { setAdminToken(session.accessToken); setAdminExpiry(session.expiresAt); }
+    }).catch(error => { if (active) setAdminAuthError(error.message); }).finally(() => {
+      window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -147,10 +166,11 @@ export default function App() {
           <div><div className="eyebrow"><span className="eyebrow-dot"/> YOUR DATA, WITHOUT BORDERS</div><h1>Environmental overview<span className="title-period">.</span></h1><p>Explore historical environmental measurements across regions, backed by verifiable S3 data.</p></div>
           <div className="intro-icon"><Icon name="globe" size={35}/></div>
         </section>
-        <div className="disclaimer"><Icon name="info" size={16}/><span>Historical ERA5 observations — not live weather, forecasts, or real-time sensor readings.</span></div>
+        <div className="disclaimer"><Icon name="info" size={16}/><span>Historical observations (ERA5 for preloaded cities; administrator-provided for uploads) — not live weather or forecasts.</span></div>
         {catalog.error && <StatusPanel title="Global catalog unavailable" description={catalog.error.message} code={catalog.error.code} retry={() => setReload((v) => v + 1)} />}
         {!catalog.error && !catalog.loading && !catalog.datasets.length && <StatusPanel title="No published datasets" description="Hosting is connected, but no datasets have been published yet. Data integration comes next." type="notice" retry={() => setReload((v) => v + 1)}/>}
         <div className="section-heading" id="datasets"><div><span className="section-kicker">01 / SOURCES</span><h2>Federated datasets</h2></div><span className="section-subtext">{catalog.loading ? "Loading catalog…" : `${catalog.datasets.length} registered ${catalog.datasets.length === 1 ? "dataset" : "datasets"}`}</span></div>
+        <AdminUpload accessToken={adminToken} expiresAt={adminExpiry} authError={adminAuthError} onUploaded={() => setReload(v => v + 1)} onSignOut={() => { setAdminToken(null); setAdminExpiry(0); }} />
         <div className="dataset-row">
           {catalog.loading ? <><div className="skeleton dataset-skeleton"/><div className="skeleton dataset-skeleton"/></> : catalog.datasets.map((item, index) => <article className="dataset-card" key={item.dataset_id}>
             <div className="dataset-top"><span className={`city-icon ${index % 2 ? "london" : "chennai"}`}><Icon name="location" size={22}/></span><span className="region-chip">{item.aws_region}</span></div>

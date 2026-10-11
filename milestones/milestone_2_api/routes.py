@@ -1,30 +1,52 @@
-"""Read-only HTTP routes; all S3 work goes through S3Federation."""
+"""Read-only federation API and Cognito-admin-only dataset publishing API."""
 import os
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
+
 from milestones.milestone_1b_federation.federation import S3Federation
+from .admin_auth import require_admin, uploads_enabled
 from .dependencies import get_federation, hosting_only
 from .errors import ApiProblem
-from .services import METRICS, checked_city, checked_dates, checked_catalog, ensure_coverage, normalize_row, align_series
+from .services import METRICS, checked_dates, checked_catalog, ensure_coverage, normalize_row, align_series
+from .upload_service import UploadRequest, UploadService
 
 router = APIRouter()
 
+
+def full_catalog(federation):
+    catalog = checked_catalog(federation)
+    if not uploads_enabled():
+        return catalog
+    uploads = UploadService(federation).list_entries()
+    return {**catalog, "datasets": [*catalog["datasets"], *uploads]}
+
+
+def require_city(city, catalog):
+    normalized = city.strip().lower()
+    if not any(entry["city"] == normalized for entry in catalog["datasets"]):
+        raise ApiProblem(404, "DATASET_NOT_FOUND", "No dataset is registered for this city.")
+    return normalized
+
+
+def fetch_city(federation, catalog, city, start, end):
+    entry = ensure_coverage(catalog, city, start, end)
+    if city in federation.settings.cities:
+        return federation.retrieve(city, start, end)
+    return UploadService(federation).retrieve(entry, start, end)
+
+
 @router.get("/api/health")
 def health():
-    """Local-process health only; no AWS calls or S3 assertions."""
     return {"status": "ok", "service": "envirosync-api", "aws_checked": False}
 
 
 @router.get("/api/datasets")
 def datasets(federation: S3Federation = Depends(get_federation)):
     if hosting_only():
-        # Deliberately empty: zero S3 calls, no fake data, no bucket permissions.
         return {"schema_version": "1.0", "datasets": []}
     try:
-        catalog = checked_catalog(federation)
+        catalog = full_catalog(federation)
     except ClientError as exc:
-        # Hosting bootstrap: distinguish an absent catalog from IAM/S3 outages.
-        # Fail closed for every other AWS error. No sample data is fabricated.
         if (os.getenv("ENVIROSYNC_ALLOW_EMPTY_CATALOG", "false").lower() == "true"
                 and exc.response.get("Error", {}).get("Code") == "NoSuchKey"):
             catalog = {"schema_version": "1.0", "datasets": []}
@@ -36,7 +58,7 @@ def datasets(federation: S3Federation = Depends(get_federation)):
             {
                 "dataset_id": entry["dataset_id"],
                 "city": entry["city"],
-                "display_name": entry["city"].title(),
+                "display_name": entry["city"].replace("-", " ").title(),
                 "country": entry["country"],
                 "aws_region": entry["region"],
                 "source": entry["source"],
@@ -60,11 +82,10 @@ def observations(
 ):
     if hosting_only():
         raise ApiProblem(503, "DATA_NOT_CONNECTED", "Environmental data integration is disabled in hosting-only mode.")
-    name = checked_city(city, federation)
     checked_dates(start, end)
-    catalog = checked_catalog(federation)
-    ensure_coverage(catalog, name, start, end)
-    data = federation.retrieve(name, start, end)
+    catalog = full_catalog(federation)
+    name = require_city(city, catalog)
+    data = fetch_city(federation, catalog, name, start, end)
     return {
         "city": name,
         "aws_region": data["region"],
@@ -91,16 +112,42 @@ def compare(
 ):
     if hosting_only():
         raise ApiProblem(503, "DATA_NOT_CONNECTED", "Environmental data integration is disabled in hosting-only mode.")
-    first_name = checked_city(city1, federation)
-    second_name = checked_city(city2, federation)
-    if first_name == second_name:
-        raise ApiProblem(400, "DUPLICATE_CITIES", "Select two distinct cities for comparison.")
     if metric not in METRICS:
         raise ApiProblem(400, "UNKNOWN_METRIC", f"Metric must be one of: {', '.join(METRICS)}.")
     checked_dates(start, end)
-    catalog = checked_catalog(federation)
-    ensure_coverage(catalog, first_name, start, end)
-    ensure_coverage(catalog, second_name, start, end)
-    first = federation.retrieve(first_name, start, end)
-    second = federation.retrieve(second_name, start, end)
+    catalog = full_catalog(federation)
+    first_name = require_city(city1, catalog)
+    second_name = require_city(city2, catalog)
+    if first_name == second_name:
+        raise ApiProblem(400, "DUPLICATE_CITIES", "Select two distinct cities for comparison.")
+    first = fetch_city(federation, catalog, first_name, start, end)
+    second = fetch_city(federation, catalog, second_name, start, end)
     return align_series(first_name, second_name, metric, first, second)
+
+
+@router.get("/api/admin/session")
+def admin_session(claims: dict = Depends(require_admin)):
+    return {"admin": True, "username": claims.get("username", "administrator")}
+
+
+@router.post("/api/admin/datasets", status_code=201)
+def admin_publish_dataset(
+    payload: UploadRequest,
+    response: Response,
+    claims: dict = Depends(require_admin),
+    federation: S3Federation = Depends(get_federation),
+):
+    if hosting_only():
+        raise ApiProblem(503, "DATA_NOT_CONNECTED", "S3 federation is disabled.")
+    entry = UploadService(federation).publish(payload, claims.get("sub", "administrator"))
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "created": True,
+        "dataset": {
+            "dataset_id": entry["dataset_id"], "city": entry["city"],
+            "country": entry["country"], "aws_region": entry["region"],
+            "start_date": entry["start_date"], "end_date": entry["end_date"],
+            "observation_count": entry["observation_count"],
+            "sha256": entry["sha256"],
+        },
+    }
