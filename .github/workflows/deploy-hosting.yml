@@ -46,7 +46,7 @@ jobs:
         run: |
           sam validate --template-file milestones/milestone_4_deployment/infrastructure/template.yaml
           sam build --template-file milestones/milestone_4_deployment/infrastructure/template.yaml --build-dir .aws-sam/build
-          sam deploy --template-file .aws-sam/build/template.yaml --stack-name envirosync-hosting --region ap-south-1 --resolve-s3 --capabilities CAPABILITY_IAM --no-confirm-changeset --no-fail-on-empty-changeset
+          sam deploy --template-file .aws-sam/build/template.yaml --stack-name envirosync-hosting --region ap-south-1 --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-xze8mghbmwfk --capabilities CAPABILITY_IAM --no-confirm-changeset --no-fail-on-empty-changeset
       - name: Publish React to private S3 bucket, invalidate CloudFront
         run: |
           aws cloudformation describe-stacks --stack-name envirosync-hosting --region ap-south-1 --query 'Stacks[0].Outputs' --output json > /tmp/envirosync-outputs.json
