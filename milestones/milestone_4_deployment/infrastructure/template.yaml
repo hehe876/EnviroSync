@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'EnviroSync M4A Free Plan: React S3 CloudFront + Lambda API, hosting only, no dataset bucket permissions'
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [x86_64]
+    Timeout: 15
+    MemorySize: 256
+    Tracing: Disabled
+
+Resources:
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 2
+
+  Backend:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../build/lambda/
+      Handler: milestones.milestone_2_api.lambda_handler.handler
+      Environment:
+        Variables:
+          ENVIROSYNC_HOSTING_ONLY: 'true'
+          ENVIROSYNC_ALLOW_EMPTY_CATALOG: 'false'
+      # No S3 data bucket access. Lambda uses AWSLambdaBasicExecutionRole
+      # for CloudWatch only; M4B will add narrowly scoped data permissions.
+      Events:
+        GetApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref Api
+            Path: '/api/{proxy+}'
+            Method: GET
+
+  ApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${Backend}'
+      RetentionInDays: 3
+
+  WebBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  WebAccess:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-web-oac'
+        Description: Private signed access to EnviroSync React assets
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: 'EnviroSync HTTPS frontend and /api/* backend'
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: WebS3
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt WebAccess.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+          - Id: BackendHttpApi
+            DomainName: !Sub '${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: WebS3
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CacheBehaviors:
+          - PathPattern: '/api/*'
+            TargetOriginId: BackendHttpApi
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadOnlyCloudFrontDistribution
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${WebBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+
+Outputs:
+  WebsiteUrl:
+    Description: Public HTTPS URL for React + API
+    Value: !Sub 'https://${Distribution.DomainName}'
+  ApiHealthUrl:
+    Description: Public health endpoint served via CloudFront
+    Value: !Sub 'https://${Distribution.DomainName}/api/health'
+  ApiGatewayUrl:
+    Description: Direct API Gateway URL (also public, read-only)
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}'
+  WebBucketName:
+    Description: New private React-only bucket; not the data buckets
+    Value: !Ref WebBucket
+  DistributionId:
+    Value: !Ref Distribution
+  BackendFunctionName:
+    Value: !Ref Backend

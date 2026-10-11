@@ -1,0 +1,23 @@
+{
+  "name": "envirosync-frontend",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "description": "Real-data dashboard for the EnviroSync federation API",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "test": "node --test src/lib/*.test.mjs",
+    "check": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.5.2",
+    "vite": "^6.3.5"
+  },
+  "engines": {"node": ">=20.19.0"}
+}

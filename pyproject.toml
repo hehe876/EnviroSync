@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "envirosync-milestone-blocks"
+version = "3.0.0"
+description = "EnviroSync modular monorepo with self-contained milestone functionality blocks"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "boto3>=1.34,<2",
+  "python-dotenv>=1,<2",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
+
+[project.scripts]
+envirosync = "milestones.milestone_1b_federation.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["milestones", "milestones.milestone_1b_federation*", "milestones.milestone_2_api*", "milestones.milestone_4_deployment*"]
+exclude = ["milestones.milestone_3_frontend*"]
+
+[tool.pytest.ini_options]
+testpaths = ["milestones/milestone_1b_federation/tests", "milestones/milestone_2_api/tests", "milestones/milestone_4_deployment/tests"]
+addopts = "-ra"

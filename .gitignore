@@ -1,0 +1,47 @@
+# Never commit secrets, tokens or machine-specific AWS identities
+.env
+.env.*
+!.env.example
+!milestones/milestone_3_frontend/.env.example
+.aws/
+*.pem
+*.key
+*.p12
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Local ingested data and generated outputs
+milestones/milestone_1b_federation/preview/
+milestones/milestone_1b_federation/downloads/
+*.log
+
+# React
+milestones/milestone_3_frontend/node_modules/
+milestones/milestone_3_frontend/dist/
+milestones/milestone_3_frontend/coverage/
+
+# Developer backups and archives
+*.zip
+legacy_backups/
+.venv_backup/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Generated hosting artifacts (never commit deployment packages)
+.aws-sam/
+milestones/milestone_4_deployment/build/

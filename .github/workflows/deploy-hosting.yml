@@ -1,0 +1,60 @@
+name: Deploy EnviroSync M4A (Free account)
+# Deliberately manual to prevent surprise Free Tier credit usage.
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+concurrency:
+  group: envirosync-hosting-free-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: hosting
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Backend tests
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pytest -q
+      - name: Frontend tests and production build
+        working-directory: milestones/milestone_3_frontend
+        env:
+          VITE_API_BASE_URL: ''
+        run: |
+          npm install --no-audit --no-fund
+          npm run test
+          npm run build
+      - name: Stage canonical Lambda modules
+        run: python milestones/milestone_4_deployment/scripts/stage_lambda.py
+      - name: Assume short-lived AWS credentials (GitHub OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-south-1
+      - uses: aws-actions/setup-sam@v2
+      - name: Stop unless account is active on AWS Free plan
+        run: python milestones/milestone_4_deployment/scripts/preflight_free_plan.py --region ap-south-1
+      - name: Deploy hosting-only stack
+        run: |
+          sam validate --template-file milestones/milestone_4_deployment/infrastructure/template.yaml
+          sam build --template-file milestones/milestone_4_deployment/infrastructure/template.yaml --build-dir .aws-sam/build
+          sam deploy --template-file .aws-sam/build/template.yaml --stack-name envirosync-hosting --region ap-south-1 --resolve-s3 --capabilities CAPABILITY_IAM --no-confirm-changeset --no-fail-on-empty-changeset
+      - name: Publish React to private S3 bucket, invalidate CloudFront
+        run: |
+          aws cloudformation describe-stacks --stack-name envirosync-hosting --region ap-south-1 --query 'Stacks[0].Outputs' --output json > /tmp/envirosync-outputs.json
+          WEB_BUCKET=$(python -c "import json; o=json.load(open('/tmp/envirosync-outputs.json')); print(next(x['OutputValue'] for x in o if x['OutputKey']=='WebBucketName'))")
+          DIST_ID=$(python -c "import json; o=json.load(open('/tmp/envirosync-outputs.json')); print(next(x['OutputValue'] for x in o if x['OutputKey']=='DistributionId'))")
+          URL=$(python -c "import json; o=json.load(open('/tmp/envirosync-outputs.json')); print(next(x['OutputValue'] for x in o if x['OutputKey']=='WebsiteUrl'))")
+          aws s3 sync milestones/milestone_3_frontend/dist "s3://$WEB_BUCKET/" --delete --region ap-south-1 --cache-control 'public,max-age=300'
+          aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths '/*'
+          echo "ENV_URL=$URL" >> "$GITHUB_ENV"
+      - name: Verify public HTTPS hosting-only endpoints
+        run: python milestones/milestone_4_deployment/scripts/check_live_hosting.py --url "$ENV_URL" --expect-empty --hosting-only
