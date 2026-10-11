@@ -1,13 +1,21 @@
-"""HTTPS hosting smoke test; no writes and no need for environmental data.
+"""EnviroSync M4B HTTPS deployment verification.
 
-Input: --url from CloudFormation WebsiteUrl output.
-Output: PASS/FAIL for React HTML, health, and dataset catalog.
+Checks:
+- React frontend is served over HTTPS
+- FastAPI health endpoint is available
+- Chennai and London datasets are discovered
+- Both cities return historical observations
+- SHA-256 integrity verification succeeds
+- Cross-region comparison returns aligned data
+
+The script performs read-only HTTP requests.
 """
 import argparse
 import json
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlencode
 
 
 def get(url):
@@ -36,6 +44,66 @@ def smoke(base_url, expect_empty=False, hosting_only=False):
     if expect_empty and catalog["datasets"]:
         raise AssertionError("Expected an empty catalog; actual data is present")
     print(f"PASS: catalog request succeeded ({len(catalog['datasets'])} datasets)")
+    if not hosting_only and not expect_empty:
+        cities = {item.get("city") for item in catalog["datasets"]}
+
+        if cities != {"chennai", "london"}:
+            raise AssertionError(
+                f"Expected Chennai and London datasets, got {cities}"
+            )
+
+        print("PASS: Chennai and London datasets discovered")
+
+        for city in ("chennai", "london"):
+            query = urlencode({
+                "city": city,
+                "start": "2025-07-01",
+                "end": "2025-07-07",
+            })
+
+            _, _, response_body = get(
+                base + "/api/observations?" + query
+            )
+
+            observations = json.loads(response_body)
+
+            if observations.get("city") != city:
+                raise AssertionError(
+                    f"Incorrect city returned for {city}"
+                )
+
+            if observations.get("row_count") != 7:
+                raise AssertionError(
+                    f"Expected 7 observations for {city}"
+                )
+
+            if observations.get("sha256_verified") is not True:
+                raise AssertionError(
+                    f"SHA-256 verification failed for {city}"
+                )
+
+            print(f"PASS: {city.title()} observations verified")
+
+        query = urlencode({
+            "city1": "chennai",
+            "city2": "london",
+            "start": "2025-07-01",
+            "end": "2025-07-07",
+            "metric": "temp_max_c",
+        })
+
+        _, _, response_body = get(
+            base + "/api/compare?" + query
+        )
+
+        comparison = json.loads(response_body)
+
+        if len(comparison.get("points", [])) != 7:
+            raise AssertionError(
+                "Expected 7 comparison data points"
+            )
+
+        print("PASS: Cross-region comparison verified")
     if hosting_only:
         from urllib.parse import urlencode
         query = urlencode({"city": "chennai", "start": "2025-01-01", "end": "2025-01-02"})

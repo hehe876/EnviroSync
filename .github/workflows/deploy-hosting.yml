@@ -1,4 +1,4 @@
-﻿name: Deploy EnviroSync M4A (Free account)
+﻿name: Deploy EnviroSync M4B (Free account)
 # Deliberately manual to prevent surprise Free Tier credit usage.
 on:
   workflow_dispatch:
@@ -42,7 +42,7 @@ jobs:
       - uses: aws-actions/setup-sam@v2
       - name: Stop unless account is active on AWS Free plan
         run: python milestones/milestone_4_deployment/scripts/preflight_free_plan.py --region ap-south-1
-      - name: Deploy hosting-only stack
+      - name: Deploy cross-region federation stack
         run: |
           sam validate --template-file milestones/milestone_4_deployment/infrastructure/template.yaml
           sam build --template-file milestones/milestone_4_deployment/infrastructure/template.yaml --build-dir .aws-sam/build
@@ -56,6 +56,5 @@ jobs:
           aws s3 sync milestones/milestone_3_frontend/dist "s3://$WEB_BUCKET/" --delete --region ap-south-1 --cache-control 'public,max-age=300'
           aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths '/*'
           echo "ENV_URL=$URL" >> "$GITHUB_ENV"
-      - name: Verify public HTTPS hosting-only endpoints
-        run: python milestones/milestone_4_deployment/scripts/check_live_hosting.py --url "$ENV_URL" --expect-empty --hosting-only
-
+      - name: Verify public HTTPS federation endpoints
+        run: python milestones/milestone_4_deployment/scripts/check_live_hosting.py --url "$ENV_URL"
